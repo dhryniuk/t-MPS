@@ -3,25 +3,26 @@ using DelimitedFiles
 
 
 
-h=0.5
+h=1.0
 γ=1.0
-J=1.0
+J=0.5
 
 l1 = make_one_body_Lindbladian(h*sx,γ*sm)
 l2 = J*make_two_body_Lindblad_Hamiltonian(sz,sz)
 l2_four = reshape(l2,4,4,4,4)
 
 
-τ = 0.01
-χ=4
-N=2
+T = 1
+τ = 0.001
+χ=2
+N=4
 
 
 mps = MatrixProductState(χ, N)
 
 bond_dim = [[1]; fill(χ, N-1); [1]]
 for i in 1:N
-    mps.mp[i] += 0.005*ones(ComplexF64, bond_dim[i], 4, bond_dim[i+1])
+    #mps.mp[i] += 0.005*ones(ComplexF64, bond_dim[i], 4, bond_dim[i+1])
 end
 #mps.mp = [rand(ComplexF64, bond_dim[i], 4, bond_dim[i+1]) for i in 1:N]
 mps_init = MatrixProductState(χ, N)
@@ -36,6 +37,11 @@ U2 = reshape(exp(l2*τ),4,4,4,4)
 U2 = permutedims(U2, (1,3,2,4))
 ## [α_1, β_1, α_2, β_2]
 
+U2_half = reshape(exp(l2*τ/2),4,4,4,4)
+## [α_1, α_2, β_1, β_2]
+U2_half = permutedims(U2_half, (1,3,2,4))
+## [α_1, β_1, α_2, β_2]
+
 
 #U1 = convert(Matrix{ComplexF64},U1)
 #U2 = convert(Array{ComplexF64,4},U2)
@@ -46,16 +52,33 @@ U2 = permutedims(U2, (1,3,2,4))
 #mpo = reshape(mpo,4,4,4,4)
 #mpo = permutedims(mpo, (1,3,2,4))
 
-mx = []
-my = []
-mz = []
-for i in 1:5000
-    global mps = time_evolve(mps, χ, N, U1, U2)
-    push!(mx, exp_val_site_1(mps,sx)/trace_norm(mps))
-    push!(my, exp_val_site_1(mps,sy)/trace_norm(mps))
-    push!(mz, exp_val_site_1(mps,sz)/trace_norm(mps))
+function run(mps)
+    mx = []
+    my = []
+    mz = []
+    n=2
+    for i in 1:T÷τ
+        mps = time_evolve(mps, χ, N, U1, U2)
+        #global mps = time_evolve(mps, χ, N, U1, U2, U2_half)
+
+        println(exp_val(mps,sz))
+
+        #push!(mx, exp_val(mps,sx))
+        #push!(my, exp_val(mps,sy))
+        #push!(mz, exp_val(mps,sz))
+
+
+        #push!(mx, exp_val(mps,sx,n)/trace_norm(mps))
+        #push!(my, exp_val(mps,sy,n)/trace_norm(mps))
+        #push!(mz, exp_val(mps,sz,n)/trace_norm(mps))
+    #    push!(mx, exp_val_site_N(mps,sx)/trace_norm(mps))
+    #    push!(my, exp_val_site_N(mps,sy)/trace_norm(mps))
+    #    push!(mz, exp_val_site_N(mps,sz)/trace_norm(mps))
+    end
+    #writedlm("mx.txt", real.(mx))
+    #writedlm("my.txt", real.(my))
+    #writedlm("mz.txt", real.(mz))
 end
-#println()
-writedlm("mx.txt", real.(mx))
-writedlm("my.txt", real.(my))
-writedlm("mz.txt", real.(mz))
+
+#run(mps)
+@profview run(mps)

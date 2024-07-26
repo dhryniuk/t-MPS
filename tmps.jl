@@ -72,7 +72,7 @@ function left_normalize!(mps::MatrixProductState)
         mps.mp[i] = reshape(f.U[:,1:bond_dim], (orig_shape[1], orig_shape[2], :))
         Vt=f.Vt[1:bond_dim,:]
         #println(size(mps.mp[i+1]),size(S),size(Vt))
-        @tensor mps.mp[i+1][a, σ, d] := S[a, e] * Vt[e, b] * mps.mp[i+1][b, σ, d]
+        @tensor mps.mp[i+1][a, σ, d] := S[a, e] * Vt[e, b] * mps.mp[i+1][b, σ, d] #TYPE INSTABILITY
     end
     orig_shape = size(mps.mp[N])
     ms = reshape(mps.mp[N], (prod(orig_shape[1:2]), :))
@@ -189,12 +189,47 @@ function transform_into_mpos(U2)
         @tensor mpo_odd[i][c,x,y,a] := sq_s[c,b]*v[b,x,y,a]
     end
 
+    #the below may be wrong:
     mpo_even = [id_op for _ in 1:N]
     for i in 2:2:N-1
-        mpo_even[i] = u
+        @tensor mpo_even[i][a,x,y,c] := u[a,x,y,b]*sq_s[b,c]
     end
-    for i in 3:2:N
-        mpo_even[i] = v
+    for i in 3:2:N 
+        @tensor mpo_even[i][c,x,y,a] := sq_s[c,b]*v[b,x,y,a]
+    end
+
+    return mpo_odd, mpo_even
+end
+
+function transform_into_mpos(U2, U2_half)
+
+    _u,s,_v = svd(reshape(U2_half, (16,16)))
+    u = reshape(_u,(1,4,4,16))
+    v = reshape(adjoint(_v),(16,4,4,1))
+    sq_s = diagm(sqrt.(s))
+    id_op = reshape(Matrix{ComplexF64}(I, 4, 4), 1, 4, 4, 1)
+
+    mpo_odd = [id_op for _ in 1:N]
+    for i in 1:2:N-1
+        @tensor mpo_odd[i][a,x,y,c] := u[a,x,y,b]*sq_s[b,c]
+    end
+    for i in 2:2:N
+        @tensor mpo_odd[i][c,x,y,a] := sq_s[c,b]*v[b,x,y,a]
+    end
+
+    _u,s,_v = svd(reshape(U2, (16,16)))
+    u = reshape(_u,(1,4,4,16))
+    v = reshape(adjoint(_v),(16,4,4,1))
+    sq_s = diagm(sqrt.(s))
+    id_op = reshape(Matrix{ComplexF64}(I, 4, 4), 1, 4, 4, 1)
+
+    #the below may be wrong:
+    mpo_even = [id_op for _ in 1:N]
+    for i in 2:2:N-1
+        @tensor mpo_even[i][a,x,y,c] := u[a,x,y,b]*sq_s[b,c]
+    end
+    for i in 3:2:N 
+        @tensor mpo_even[i][c,x,y,a] := sq_s[c,b]*v[b,x,y,a]
     end
 
     return mpo_odd, mpo_even
@@ -224,33 +259,79 @@ function time_evolve(mps::MatrixProductState, χ::Int, N::Int, U1, U2)
     for i in 1:N
         @tensor mp2[i][a,x',b] = mp[i][a,x,b]*U1[x',x]
     end
-    #mps2, _ = right_normalize!(mps2)
-    #mps2, _ = left_normalize!(mps2)
 
     mpo_odd, mpo_even = transform_into_mpos(U2)
 
+    mps2 = apply(mpo_odd,mps2) #slow
+    mps2 = apply(mpo_even,mps2) #slow
+
+    mps2, _ = left_normalize!(mps2)
+    
+    svd_compress!(mps2,χ)
+    return mps2
+end
+
+function time_evolve(mps::MatrixProductState, χ::Int, N::Int, U1, U2, U2_half)
+    mp = mps.mp
+
+    mps2 = MatrixProductState(χ, N)
+    mps2.mp = deepcopy(mps.mp)
+    mp2 = mps2.mp
+
+    ### U1:
+    for i in 1:N
+        @tensor mp2[i][a,x',b] = mp[i][a,x,b]*U1[x',x]
+    end
+    #mps2, _ = right_normalize!(mps2)
+    #mps2, _ = left_normalize!(mps2)
+
+    mpo_odd, mpo_even = transform_into_mpos(U2, U2_half)
+
     mps2 = apply(mpo_odd,mps2)
     mps2 = apply(mpo_even,mps2)
+    mps2 = apply(mpo_odd,mps2)
 
     #mps2, _ = right_normalize!(mps2)
     mps2, _ = left_normalize!(mps2)
-
-    #println(size(mps2.mp[1]),size(mps2.mp[2]))
-    #error()
     
     svd_compress!(mps2,χ)
     #println(size(mps2.mp[1]),size(mps2.mp[2]))
     mps2, _ = left_normalize!(mps2)
 
-    #println("Exp val 1 unnormalized = ", exp_val_site_1(mps2,sz))
-    #println("Exp val σ_x 1 normalized = ", exp_val_site_1(mps2,sx)/trace_norm(mps2))
-    #println("Exp val σ_y 1 normalized = ", exp_val_site_1(mps2,sy)/trace_norm(mps2))
-    #println("Exp val σ_z 1 normalized = ", exp_val_site_1(mps2,sz)/trace_norm(mps2))
-
-    #println("Exp val N unnormalized = ", exp_val_site_N(mps2,sz))
-    #println("Exp val N normalized = ", exp_val_site_N(mps2,sz)/trace_norm(mps2))
-
     return mps2
+end
+
+
+function exp_val(mps::MatrixProductState, op::Matrix, site::Int)
+    #N = length(mps.mp)
+    if site < 1 || site > N
+        throw(ArgumentError("Site must be between 1 and $N"))
+    end
+
+    E = Matrix{ComplexF64}(I, (1, 1))
+
+    for i in 1:N
+        ms = mps.mp[i]
+        orig_shape = size(ms)
+        ms = reshape(ms, (orig_shape[1], 2, 2, orig_shape[3]))
+
+        if i == site
+            @tensor E[a,c] := E[a,b] * ms[b,u,v,c] * op[u,v]
+        else
+            @tensor E[a,c] := E[a,b] * ms[b,u,u,c]
+        end
+    end
+
+    return tr(E)
+end
+
+
+function exp_val(mps::MatrixProductState, op::Matrix)
+    ev = zero(ComplexF64)
+    for i in 1:N
+        ev += exp_val(mps, op, i)
+    end
+    return ev/trace_norm(mps)/N
 end
 
 function exp_val_site_1(mps::MatrixProductState, op::Matrix)
@@ -292,8 +373,4 @@ function trace_norm(mps::MatrixProductState)
         @tensor E[a,c] := E[a,b]*ms[b,u,u,c]
     end
     return tr(E)
-end
-
-function ()
-    
 end
