@@ -34,7 +34,7 @@ function make_two_body_Lindblad_Hamiltonian(A, B)
 end
 
 mutable struct MatrixProductState
-    mp::Array{Array}
+    mp::Vector{Array{ComplexF64, 3}}
     MatrixProductState(mp) = new(mp)
     function MatrixProductState(χ::Int, N::Int)
         bond_dim = [[1]; fill(χ, N-1); [1]]
@@ -63,20 +63,24 @@ function left_normalize!(mps::MatrixProductState)
     for i in 1:N-1
         orig_shape = size(mps.mp[i])
         ms = reshape(mps.mp[i], (prod(orig_shape[1:2]), :))
-        f = svd(ms,full=true)
+        #println(typeof(ms))
+        #error()
+        f = svd(ms,full=false)
         bond_dim = min(length(f.S), size(mps.mp[i+1])[1])
-        S = diagm(f.S)[1:bond_dim,1:bond_dim]
+        S::Matrix{Float64} = diagm(f.S)[1:bond_dim,1:bond_dim]
         #println("bond_dim=",bond_dim)
         #println(size(mps.mp[i]),size(mps.mp[i+1]))
         #println(size(f.U),size(S),size(f.Vt))
         mps.mp[i] = reshape(f.U[:,1:bond_dim], (orig_shape[1], orig_shape[2], :))
-        Vt=f.Vt[1:bond_dim,:]
+        Vt::Matrix{ComplexF64} = f.Vt[1:bond_dim,:]
         #println(size(mps.mp[i+1]),size(S),size(Vt))
-        @tensor mps.mp[i+1][a, σ, d] := S[a, e] * Vt[e, b] * mps.mp[i+1][b, σ, d] #TYPE INSTABILITY
+        @tensor mps.mp[i+1][a, σ, d] := ( S[a, e] * Vt[e, b] ) * mps.mp[i+1][b, σ, d] #TYPE INSTABILITY
     end
     orig_shape = size(mps.mp[N])
     ms = reshape(mps.mp[N], (prod(orig_shape[1:2]), :))
-    f = svd(ms,full=true)
+    f = svd(ms,full=false)
+    #println(typeof(f))
+    #error()
     bond_dim = min(length(f.S), size(mps.mp[N])[1])
     S = diagm(f.S)[1:bond_dim,1:bond_dim]
 
@@ -94,18 +98,18 @@ function right_normalize!(mps::MatrixProductState)
     for i in N:-1:2
         orig_shape = size(mps.mp[i])
         ms = reshape(mps.mp[i], (:, prod(orig_shape[2:end])))
-        f = svd(ms,full=true)
+        f = svd(ms,full=false)
 
         bond_dim = min(length(f.S), size(mps.mp[i-1])[end])
-        S = diagm(f.S)[1:bond_dim,1:bond_dim]
+        S::Matrix{Float64} = diagm(f.S)[1:bond_dim,1:bond_dim]
 
         mps.mp[i] = reshape(f.Vt[1:bond_dim,:], (:, orig_shape[2], orig_shape[3]))
-        U = f.U[:,1:bond_dim]
-        @tensor mps.mp[i-1][a, σ, b] := mps.mp[i-1][a, σ, c] * U[c, d] * S[d, b]
+        U::Matrix{ComplexF64} = f.U[:,1:bond_dim]
+        @tensor mps.mp[i-1][a, σ, b] := mps.mp[i-1][a, σ, c] * ( U[c, d] * S[d, b] )
     end
     orig_shape = size(mps.mp[1])
     ms = reshape(mps.mp[1], (:, prod(orig_shape[2:end])))
-    f = svd(ms,full=true)
+    f = svd(ms,full=false)
 
     bond_dim = min(length(f.S), size(mps.mp[1])[end])
     S = diagm(f.S)[1:bond_dim,1:bond_dim]
@@ -120,18 +124,18 @@ function svd_compress!(mps::MatrixProductState, trun_bond_dim::Int)
     for i in N:-1:2
         orig_shape = size(mps.mp[i])
         ms = reshape(mps.mp[i], (:, prod(orig_shape[2:end])))
-        f = svd(ms,full=true)
+        f = svd(ms,full=false)
 
         bond_dim = min(trun_bond_dim, length(f.S), size(mps.mp[i-1])[end])
-        S = diagm(f.S)[1:bond_dim, 1:bond_dim]
+        S::Matrix{Float64} = diagm(f.S)[1:bond_dim, 1:bond_dim]
 
         mps.mp[i] = reshape(f.Vt[1:bond_dim,:], (:, orig_shape[2], orig_shape[3]))
-        U = f.U[:,1:bond_dim]
-        @tensor mps.mp[i-1][a, σ, b] := mps.mp[i-1][a, σ, c] * U[c, d] * S[d, b]
+        U::Matrix{ComplexF64} = f.U[:,1:bond_dim]
+        @tensor mps.mp[i-1][a, σ, b] := mps.mp[i-1][a, σ, c] * ( U[c, d] * S[d, b] )
     end
     orig_shape = size(mps.mp[1])
     ms = reshape(mps.mp[1], (:, prod(orig_shape[2:end])))
-    f = svd(ms,full=true)
+    f = svd(ms,full=false)
 
     bond_dim = min(trun_bond_dim, length(f.S), size(mps.mp[1])[end])
     S = diagm(f.S)[1:bond_dim, 1:bond_dim]
@@ -189,7 +193,6 @@ function transform_into_mpos(U2)
         @tensor mpo_odd[i][c,x,y,a] := sq_s[c,b]*v[b,x,y,a]
     end
 
-    #the below may be wrong:
     mpo_even = [id_op for _ in 1:N]
     for i in 2:2:N-1
         @tensor mpo_even[i][a,x,y,c] := u[a,x,y,b]*sq_s[b,c]
@@ -223,7 +226,6 @@ function transform_into_mpos(U2, U2_half)
     sq_s = diagm(sqrt.(s))
     id_op = reshape(Matrix{ComplexF64}(I, 4, 4), 1, 4, 4, 1)
 
-    #the below may be wrong:
     mpo_even = [id_op for _ in 1:N]
     for i in 2:2:N-1
         @tensor mpo_even[i][a,x,y,c] := u[a,x,y,b]*sq_s[b,c]
@@ -237,7 +239,7 @@ end
 
 function apply(mpo, mps::MatrixProductState)
     mp = mps.mp
-    Nmp=[zeros(ComplexF64,(size(mp[i])[1],size(mpo[i])[1],4,size(mp[i])[3],size(mpo[i])[4])) for i in 1:N]
+    Nmp::Vector{Array{ComplexF64,5}} = [zeros(ComplexF64,(size(mp[i])[1],size(mpo[i])[1],4,size(mp[i])[3],size(mpo[i])[4])) for i in 1:N]
     mp2 = Array{Array}(undef,N)
     for i in 1:N
         @tensor Nmp[i][a,a',x',b,b'] = mpo[i][a',x,x',b']*mp[i][a,x,b]
@@ -248,7 +250,8 @@ function apply(mpo, mps::MatrixProductState)
     return mps
 end
 
-function time_evolve(mps::MatrixProductState, χ::Int, N::Int, U1, U2)
+function time_evolve(mps::MatrixProductState, χ::Int, N::Int, U1, U1_boundary, U2)
+#function time_evolve(mps::MatrixProductState, χ::Int, N::Int, U1, U2)
     mp = mps.mp
 
     mps2 = MatrixProductState(χ, N)
@@ -259,11 +262,15 @@ function time_evolve(mps::MatrixProductState, χ::Int, N::Int, U1, U2)
     for i in 1:N
         @tensor mp2[i][a,x',b] = mp[i][a,x,b]*U1[x',x]
     end
+    ### U1 boundary:
+    @tensor mp2[1][a,x',b] := mp2[1][a,x,b]*U1_boundary[x',x]
+    @tensor mp2[N][a,x',b] := mp2[N][a,x,b]*U1_boundary[x',x]
+
 
     mpo_odd, mpo_even = transform_into_mpos(U2)
 
-    mps2 = apply(mpo_odd,mps2) #slow
-    mps2 = apply(mpo_even,mps2) #slow
+    mps2 = apply(mpo_odd,mps2)
+    mps2 = apply(mpo_even,mps2)
 
     mps2, _ = left_normalize!(mps2)
     
@@ -271,6 +278,7 @@ function time_evolve(mps::MatrixProductState, χ::Int, N::Int, U1, U2)
     return mps2
 end
 
+"""
 function time_evolve(mps::MatrixProductState, χ::Int, N::Int, U1, U2, U2_half)
     mp = mps.mp
 
@@ -282,8 +290,6 @@ function time_evolve(mps::MatrixProductState, χ::Int, N::Int, U1, U2, U2_half)
     for i in 1:N
         @tensor mp2[i][a,x',b] = mp[i][a,x,b]*U1[x',x]
     end
-    #mps2, _ = right_normalize!(mps2)
-    #mps2, _ = left_normalize!(mps2)
 
     mpo_odd, mpo_even = transform_into_mpos(U2, U2_half)
 
@@ -291,16 +297,13 @@ function time_evolve(mps::MatrixProductState, χ::Int, N::Int, U1, U2, U2_half)
     mps2 = apply(mpo_even,mps2)
     mps2 = apply(mpo_odd,mps2)
 
-    #mps2, _ = right_normalize!(mps2)
     mps2, _ = left_normalize!(mps2)
     
     svd_compress!(mps2,χ)
-    #println(size(mps2.mp[1]),size(mps2.mp[2]))
-    mps2, _ = left_normalize!(mps2)
 
     return mps2
 end
-
+"""
 
 function exp_val(mps::MatrixProductState, op::Matrix, site::Int)
     #N = length(mps.mp)
@@ -373,4 +376,47 @@ function trace_norm(mps::MatrixProductState)
         @tensor E[a,c] := E[a,b]*ms[b,u,u,c]
     end
     return tr(E)
+end
+
+function compute_purity(mps::MatrixProductState)
+    N = length(mps.mp)
+    χs = [size(mps.mp[i], 1) for i in 1:N]
+    χs = [1; χs; 1]
+
+
+    ms = mps.mp[1]
+    orig_shape = size(ms)
+    ms=reshape(ms,(orig_shape[1],2,2,orig_shape[3]))
+
+    #println(size(ms))
+
+    B = zeros(ComplexF64, (orig_shape[1],orig_shape[3],orig_shape[1],orig_shape[3]))
+    @tensor B[a,b,p,q] = ms[a,x,y,b]*ms[p,y,x,q]
+
+    #B = zeros(ComplexF64,1,1,1,1)
+    for i in 2:N
+        ms = mps.mp[i]
+        orig_shape = size(ms)
+        ms=reshape(ms,(orig_shape[1],2,2,orig_shape[3]))
+        #println(size(B))
+        #println(size(ms))
+        @tensor B[a,b,p,q] := B[a,c,p,r]*ms[c,x,y,b]*ms[r,y,x,q]
+    end
+    
+    purity = @tensor B[a,a,b,b]
+
+    #println(mps.mp[1])
+    #println(mps.mp[2])
+    #println(trace_norm(mps))
+    #println(exp_val(mps,sz,1)/trace_norm(mps))
+    #error()
+
+    #println(trace_norm(mps))
+    #println(size(B))
+    #println(B)
+    #println(B./trace_norm(mps)^2 )
+    #println(purity)
+
+    #error()
+    return real(purity)
 end
